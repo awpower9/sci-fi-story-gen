@@ -1,79 +1,57 @@
 import streamlit as st
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
 
-# Custom CSS for better appearance
-st.markdown("""
-<style>
-    .stTextArea textarea {
-        min-height: 150px;
-    }
-    .stButton button {
-        width: 100%;
-        background-color: #4CAF50;
-        color: white;
-    }
-    .stAlert {
-        padding: 20px;
-        background-color: #f8f9fa;
-        border-left: 5px solid #4CAF50;
-    }
-</style>
-""", unsafe_allow_html=True)
+# Debugging - Show available files
+import os
+st.write("Files in directory:", os.listdir('.'))
 
 @st.cache_resource
 def load_model():
-    # Load from local directory (same folder as app.py)
-    model = AutoModelForCausalLM.from_pretrained(
-        "./",  # Changed from "path_or_repo" to local directory
-        torch_dtype=torch.float16,
-        device_map="auto"
-    )
-    tokenizer = AutoTokenizer.from_pretrained("./")
-    pipe = pipeline(
-        "text-generation",
-        model=model,
-        tokenizer=tokenizer
-    )
-    return pipe
+    try:
+        # Verify critical files exist
+        required_files = {
+            'config': 'adapter_config.json',
+            'model': 'adapter_model.safetensors',
+            'tokenizer': 'tokenizer.json'
+        }
+        
+        for name, file in required_files.items():
+            if not os.path.exists(file):
+                st.error(f"Missing {name} file: {file}")
+                return None
 
-# Expo-ready header
-st.image("https://media.giphy.com/media/3o7abKhOpu0NwenH3O/giphy.gif", width=300)
-st.title("Sci-Fi Story Generator")
-st.markdown("""
-*Trained on 50+ sci-fi books - Created for the AI Expo*  
-""")
+        # Load adapter model (special handling for TinyLlama)
+        model = AutoModelForCausalLM.from_pretrained(
+            "./",
+            torch_dtype=torch.float16,
+            device_map="auto",
+            trust_remote_code=True  # Required for some models
+        )
+        
+        tokenizer = AutoTokenizer.from_pretrained("./")
+        return model, tokenizer
+        
+    except Exception as e:
+        st.error(f"Model loading failed: {str(e)}")
+        return None, None
 
-# Main app
-prompt = st.text_area(
-    "Enter your story prompt:", 
-    "In a distant galaxy...",
-    help="Try something like 'The last human on Mars discovered...'"
-)
+# UI
+st.title("TinyLlama Story Generator")
+prompt = st.text_area("Enter prompt:", "In a futuristic city...")
 
-if st.button("Generate Story", type="primary"):
-    with st.spinner("Creating your sci-fi masterpiece..."):
-        try:
-            pipe = load_model()
-            result = pipe(
-                prompt,
-                max_length=300,  # Increased length for better stories
-                do_sample=True,
-                top_k=50,
-                top_p=0.95,
-                temperature=0.9,  # Slightly less random than 1.0
-                pad_token_id=tokenizer.eos_token_id
+if st.button("Generate"):
+    model, tokenizer = load_model()
+    if model and tokenizer:
+        with st.spinner("Generating..."):
+            inputs = tokenizer(prompt, return_tensors="pt").to('cuda')
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=200,
+                temperature=0.7,
+                do_sample=True
             )
-            st.success("Your Generated Story:")
-            st.write(result[0]['generated_text'])
-            
-            # Add download button
-            st.download_button(
-                label="Download Story",
-                data=result[0]['generated_text'],
-                file_name="sci-fi-story.txt",
-                mime="text/plain"
-            )
-        except Exception as e:
-            st.error(f"Something went wrong: {str(e)}")
-            st.info("Please try a different prompt or check the model files.")
+            story = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            st.success(story)
+    else:
+        st.warning("Model failed to load. Check error messages above.")
